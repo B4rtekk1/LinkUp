@@ -94,15 +94,16 @@ func decryptMessage(ciphertext []byte, key []byte) ([]byte, error) {
 /*
 main is the entry point of the application.
 
-It sets up the HTTP route for WebSocket connections and starts the server with TLS.
+It sets up the HTTP route for WebSocket connections and starts the server with or without TLS based on the -https flag.
 It also starts a goroutine to handle broadcasting messages to all clients.
 */
 func main() {
 	port := flag.Int("port", 8080, "Port to run the WebSocket server on")
 	certFile := flag.String("cert", "cert.pem", "Path to SSL certificate file")
 	keyFile := flag.String("key", "key.pem", "Path to SSL key file")
+	useHTTPS := flag.Bool("https", false, "Enable HTTPS/WSS (requires cert and key files)")
 	flag.Usage = func() {
-		fmt.Println("Usage: msg [-port PORT] [-cert CERT_FILE] [-key KEY_FILE]")
+		fmt.Println("Usage: msg [-port PORT] [-https] [-cert CERT_FILE] [-key KEY_FILE]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -113,12 +114,26 @@ func main() {
 	// Start a separate goroutine to handle incoming messages
 	go handleMessages()
 
-	fmt.Printf("Server running on https://localhost:%d\n", *port)
-	// Start the HTTPS server on port specified by the user or default to 8080
-	err := http.ListenAndServeTLS(":"+strconv.Itoa(*port), *certFile, *keyFile, nil)
-	if err != nil {
-		fmt.Println("Error starting server:", err)
-		return
+	// Determine the protocol (http or https) based on the -https flag
+	protocol := "http"
+	if *useHTTPS {
+		protocol = "https"
+	}
+	fmt.Printf("Server running on %s://localhost:%d\n", protocol, *port)
+
+	// Start the server with or without TLS
+	if *useHTTPS {
+		err := http.ListenAndServeTLS(":"+strconv.Itoa(*port), *certFile, *keyFile, nil)
+		if err != nil {
+			fmt.Println("Error starting HTTPS server:", err)
+			return
+		}
+	} else {
+		err := http.ListenAndServe(":"+strconv.Itoa(*port), nil)
+		if err != nil {
+			fmt.Println("Error starting HTTP server:", err)
+			return
+		}
 	}
 }
 
@@ -206,7 +221,7 @@ If there is an error while sending a message, the connection is closed and the l
 */
 func writeMessages(client *Client) {
 	for msg := range client.send {
-		err := client.conn.WriteMessage(websocket.TextMessage, msg)
+		err := client.conn.WriteMessage(websocket.BinaryMessage, msg) // Use BinaryMessage
 		if err != nil {
 			fmt.Println("Write error:", err)
 			client.conn.Close()

@@ -1,22 +1,76 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebSocket Chat Client</title>
+    <title>WebSocket Chat</title>
 </head>
 <body>
-    <input id="message" type="text" placeholder="Type a message">
+    <input id="messageInput" type="text" placeholder="Enter message">
     <button onclick="sendMessage()">Send</button>
     <div id="messages"></div>
     <script>
-        const ws = new WebSocket("ws://localhost:1200/ws");
-        ws.onmessage = function(event) {
-            const messages = document.getElementById("messages");
-            messages.innerHTML += `<p>${event.data}</p>`;
+        const aesKey = new TextEncoder().encode('examplekey1234567890123456789012');
+
+        // Encrypt a message using AES-GCM
+        async function encryptMessage(message) {
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const key = await crypto.subtle.importKey('raw', aesKey, 'AES-GCM', false, ['encrypt']);
+            const encoded = new TextEncoder().encode(message);
+            const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+            return new Uint8Array([...iv, ...new Uint8Array(encrypted)]);
+        }
+
+        // Decrypt a message using AES-GCM
+        async function decryptMessage(ciphertext) {
+            const iv = ciphertext.slice(0, 12);
+            const data = ciphertext.slice(12);
+            const key = await crypto.subtle.importKey('raw', aesKey, 'AES-GCM', false, ['decrypt']);
+            const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+            return new TextDecoder().decode(decrypted);
+        }
+
+        // Initialize WebSocket connection
+        const ws = new WebSocket('ws://localhost:1200/ws');
+        ws.binaryType = 'arraybuffer'; // Set to handle binary data
+
+        ws.onopen = () => {
+            console.log('Connected to WebSocket server');
         };
-        function sendMessage() {
-            const input = document.getElementById("message");
-            ws.send(input.value);
-            input.value = "";
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+            alert('Connection to server lost. Please refresh the page.');
+        };
+
+        ws.onmessage = async (event) => {
+            try {
+                const ciphertext = new Uint8Array(event.data);
+                const decrypted = await decryptMessage(ciphertext);
+                const message = document.createElement('div');
+                message.textContent = decrypted;
+                document.getElementById('messages').appendChild(message);
+            } catch (error) {
+                console.error('Decryption error:', error);
+            }
+        };
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            if (ws.readyState === WebSocket.OPEN) {
+                try {
+                    const encrypted = await encryptMessage(input.value);
+                    ws.send(encrypted); // Send binary data
+                    input.value = '';
+                } catch (error) {
+                    console.error('Encryption error:', error);
+                }
+            } else {
+                console.error('Cannot send message: WebSocket is not open');
+                alert('Connection to server is closed. Please refresh the page.');
+            }
         }
     </script>
 </body>

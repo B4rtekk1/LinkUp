@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -29,6 +33,7 @@ Global variables:
   - broadcast: A channel where incoming messages are placed to be broadcasted to all clients.
   - upgrader: Configuration to upgrade an HTTP connection to a WebSocket connection.
   - mu: Mutex to safely access shared resources like the clients map.
+  - aesKey: Shared AES key for message encryption (hardcoded for simplicity).
 */
 var clients = make(map[*Client]bool)
 var broadcast = make(chan []byte)
@@ -39,17 +44,65 @@ var upgrader = websocket.Upgrader{
 	},
 }
 var mu sync.Mutex
+var aesKey = []byte("examplekey1234567890123456789012") // 32-byte key for AES-256
+
+/*
+encryptMessage encrypts a message using AES-GCM with the provided key.
+*/
+func encryptMessage(message []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	return gcm.Seal(nonce, nonce, message, nil), nil
+}
+
+/*
+decryptMessage decrypts a message encrypted with AES-GCM using the provided key.
+*/
+func decryptMessage(ciphertext []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return gcm.Open(nil, nonce, ciphertext, nil)
+}
 
 /*
 main is the entry point of the application.
 
-It sets up the HTTP route for WebSocket connections and starts the server.
+It sets up the HTTP route for WebSocket connections and starts the server with TLS.
 It also starts a goroutine to handle broadcasting messages to all clients.
 */
 func main() {
 	port := flag.Int("port", 8080, "Port to run the WebSocket server on")
+	certFile := flag.String("cert", "cert.pem", "Path to SSL certificate file")
+	keyFile := flag.String("key", "key.pem", "Path to SSL key file")
 	flag.Usage = func() {
-		fmt.Println("Usage: msg [-port PORT]")
+		fmt.Println("Usage: msg [-port PORT] [-cert CERT_FILE] [-key KEY_FILE]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -60,9 +113,9 @@ func main() {
 	// Start a separate goroutine to handle incoming messages
 	go handleMessages()
 
-	fmt.Printf("Server running on http://localhost:%s\n", *port)
-	// Start the HTTP server on port specified by the user or default to 8080
-	err := http.ListenAndServe(":"+strconv.Itoa(*port), nil)
+	fmt.Printf("Server running on https://localhost:%d\n", *port)
+	// Start the HTTPS server on port specified by the user or default to 8080
+	err := http.ListenAndServeTLS(":"+strconv.Itoa(*port), *certFile, *keyFile, nil)
 	if err != nil {
 		fmt.Println("Error starting server:", err)
 		return
@@ -72,7 +125,7 @@ func main() {
 /*
 handleConnections upgrades an HTTP connection to a WebSocket connection and registers a new client.
 
-It continuously reads messages from the client and sends them to the broadcast channel.
+It continuously reads messages from the client, decrypts them, and sends them to the broadcast channel.
 When the client disconnects, it removes the client from the clients map.
 */
 func handleConnections(w http.ResponseWriter, r *http.Request) {
@@ -102,8 +155,14 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			fmt.Println("Read error:", err)
 			break
 		}
-		// Send the received message to the broadcast channel
-		broadcast <- msg
+		// Decrypt the received message
+		decryptedMsg, err := decryptMessage(msg, aesKey)
+		if err != nil {
+			fmt.Println("Decryption error:", err)
+			continue
+		}
+		// Send the decrypted message to the broadcast channel
+		broadcast <- decryptedMsg
 	}
 
 	// Remove the client from the map when they disconnect
@@ -113,7 +172,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 /*
-handleMessages listens for messages on the broadcast channel and sends them to all connected clients.
+handleMessages listens for messages on the broadcast channel, encrypts them, and sends them to all connected clients.
 
 If a client's send channel is blocked or closed, the client is removed from the clients map.
 */
@@ -121,10 +180,16 @@ func handleMessages() {
 	for {
 		// Wait for a message to broadcast
 		msg := <-broadcast
+		// Encrypt the message before broadcasting
+		encryptedMsg, err := encryptMessage(msg, aesKey)
+		if err != nil {
+			fmt.Println("Encryption error:", err)
+			continue
+		}
 		mu.Lock()
 		for client := range clients {
 			select {
-			case client.send <- msg: // Send message to the client
+			case client.send <- encryptedMsg: // Send encrypted message to the client
 			default: // If sending fails, remove the client
 				close(client.send)
 				delete(clients, client)

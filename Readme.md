@@ -1,217 +1,267 @@
-# LinkUp
+# LinkUp - Secure WebSocket Chat Application
 
 ## Overview
 
-This is a secure WebSocket-based chat server written in Go. It allows multiple clients to connect via WebSocket, send messages, and broadcast them to all connected clients. The server supports real-time communication with optional transport-layer encryption (TLS) and optional application-layer encryption (AES-GCM). It can be extended for use cases like multiplayer games or chat applications.
+LinkUp is a secure WebSocket-based chat application written in Go. It consists of a server (`main.go`) that handles user registration and real-time messaging, and a console-based client (`client.go`) for interacting with the server via a command-line interface (CMD). The server supports multiple simultaneous WebSocket connections, user registration via HTTP, and message broadcasting with AES-GCM encryption for end-to-end security. Clients must authenticate with a username and password before sending messages, ensuring only registered users can participate in the chat. The console client also supports user registration directly from the command line and displays the sender's username for each received message.
+
+This project is ideal for learning about WebSocket communication, secure message encryption, SQLite-based user management, and authentication mechanisms. It can be extended for use cases like real-time chat applications or multiplayer games.
 
 ## Features
 
-- Supports multiple simultaneous WebSocket connections over `ws://` (HTTP) or `wss://` (HTTPS) protocols.
-- Broadcasts messages received from one client to all connected clients.
-- Handles client disconnections gracefully.
-- Configurable server port and optional HTTPS support via command-line arguments.
-- Thread-safe management of clients using a mutex.
-- Optional transport-layer encryption using HTTPS/TLS for WebSocket connections (`wss://`).
-- Optional application-layer encryption using AES-GCM for end-to-end message security.
+- **User Registration**: Register users via HTTP POST to `/register` or directly from the console client, with usernames and passwords stored securely in a SQLite database with bcrypt-hashed passwords.
+- **User Authentication**: Clients must authenticate with a username and password upon WebSocket connection to send messages.
+- **Sender Identification**: Each received message displays the sender's username (e.g., `Received from Bartekbk: Hello, world!`).
+- **WebSocket Communication**: Supports multiple clients over `ws://` (HTTP) or `wss://` (HTTPS) with real-time message broadcasting.
+- **End-to-End Encryption**: Messages are encrypted and decrypted using AES-GCM with a shared 32-byte key.
+- **Thread-Safe Client Management**: Uses a mutex to safely manage connected clients.
+- **Console Client**: A command-line client (`client.go`) for registering, logging in, and sending/receiving messages via CMD.
+- **Configurable Server**: Supports HTTP/HTTPS, custom ports, and TLS certificates via command-line flags.
+- **Error Logging**: Detailed logging for debugging connection, encryption, authentication, and database issues.
 
 ## Prerequisites
 
-- **Go**: Version 1.16 or higher.
-- **Gorilla WebSocket**: A Go library for WebSocket communication.
-- **SSL/TLS Certificates** (optional): Required for HTTPS/WSS support (self-signed for testing or from a trusted CA like Let's Encrypt for production).
-- **OpenSSL** (optional): For generating self-signed certificates for testing.
+- **Go**: Version 1.16 or higher ([Install Go](https://go.dev/doc/install)).
+- **Dependencies**:
+  - `github.com/gorilla/websocket`: For WebSocket communication.
+  - `github.com/joho/godotenv`: For loading environment variables.
+  - `github.com/mattn/go-sqlite3`: For SQLite database support.
+  - `golang.org/x/crypto/bcrypt`: For password hashing.
+- **OpenSSL** (optional): For generating self-signed TLS certificates for testing HTTPS.
+- **Environment File**: A `.env` file with a 32-byte `AES_KEY` for message encryption.
 
 ## Installation
 
 1. **Clone or create the project directory**:
-   Create a directory for the project and place the `main.go` file in it.
+   Create a directory for the project and place `main.go` and `client.go` in it.
 
 2. **Initialize a Go module**:
-   Run the following command to initialize a Go module:
 
    ```bash
-   go mod init websocket-chat
+   go mod init linkup
    ```
 
 3. **Install dependencies**:
-   Install the Gorilla WebSocket library:
 
    ```bash
    go get github.com/gorilla/websocket
+   go get github.com/joho/godotenv
+   go get github.com/mattn/go-sqlite3
+   go get golang.org/x/crypto/bcrypt
    ```
 
-4. **Generate SSL/TLS certificates (for testing with HTTPS)**:
-   For local development with HTTPS, generate self-signed certificates using OpenSSL:
+4. **Create a `.env` file**:
+
+   In the project directory, create a `.env` file with a 32-byte AES key:
+
+   ```env
+   AES_KEY=6v7zX8k9p3qW2rT5mY1nJ4hL8gF2dC0a
+   ```
+
+   To generate a random key:
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+5. **Generate SSL/TLS certificates (optional, for HTTPS)**:
+   For local testing with HTTPS:
 
    ```bash
    openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
    ```
 
-   For production, obtain certificates from a trusted Certificate Authority (e.g., Let's Encrypt). See [Production Certificates](#production-certificates) for details.
-
 ## Usage
 
-1. **Run the server**:
-   - **Without HTTPS (HTTP, ws://)**:
-     Start the server on the default port (8080) using HTTP:
+### Running the Server
+
+1. **Start the server**:
+   - **Without HTTPS (recommended for local testing)**:
 
      ```bash
-     go run main.go -port=8080
+     go run main.go -port=8080 -https=false
      ```
 
-   - **With HTTPS (wss://)**:
-     Start the server with HTTPS support, specifying the port and paths to the SSL/TLS certificate and key files:
+   - **With HTTPS**:
 
      ```bash
-     go run main.go -port=8080 -https -cert=cert.pem -key=key.pem
+     go run main.go -port=8080 -https=true -cert=cert.pem -key=key.pem
      ```
 
-     If no custom port or certificate paths are specified, the server defaults to port 8080 and expects `cert.pem` and `key.pem` in the project directory.
+   - The server will listen on `http://localhost:8080` (or `https://localhost:8080` for HTTPS).
+   - Logs will confirm database initialization and server startup.
 
-2. **Connect clients**:
-   Clients must connect to the server using the appropriate WebSocket protocol:
-   - For HTTP: `ws://localhost:<port>/ws` (or `ws://yourdomain.com:<port>/ws` in production).
-   - For HTTPS: `wss://localhost:<port>/ws` (or `wss://yourdomain.com:<port>/ws` in production).
-   - Example WebSocket URLs:
-     - HTTP: `ws://localhost:8080/ws`
-     - HTTPS: `wss://localhost:8080/ws`
-   - Clients can be implemented in any language or framework that supports WebSocket, such as JavaScript (for browser-based clients) or Go.
+2. **Available endpoints**:
+   - `POST /register`: Register a new user with a JSON body `{ "username": "user", "password": "pass" }`.
+   - `WebSocket /ws`: Connect to the WebSocket server for real-time messaging (requires authentication).
 
-3. **Sending messages**:
-   - Clients send messages to the server via the WebSocket connection.
-   - If application-layer encryption is enabled, messages must be encrypted with AES-GCM using the shared key (see [Example Client](#example-client)).
-   - The server broadcasts each received message to all connected clients (decrypting and re-encrypting if application-layer encryption is used).
+### Running the Console Client
 
-4. **Example client**:
-   A simple client can be implemented in JavaScript for a browser-based interface or in Go for a console-based client. See the [Example Client](#example-client) section for details.
+1. **Start the client**:
+   In a separate terminal, run:
 
-## Example Client
+   ```bash
+   go run client.go
+   ```
 
-Below is an example of a JavaScript client that connects to the server using `ws://` or `wss://` and supports optional AES-GCM encryption for messages:
+   - Ensure the `.env` file with the same `AES_KEY` is present in the client directory.
+   - The client will prompt to choose between registration and login.
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Secure WebSocket Chat Client</title>
-</head>
-<body>
-    <input id="message" type="text" placeholder="Type a message">
-    <button onclick="sendMessage()">Send</button>
-    <div id="messages"></div>
-    <script>
-        // AES-GCM encryption/decryption functions
-        async function encryptMessage(message, key) {
-            const encoded = new TextEncoder().encode(message);
-            const iv = crypto.getRandomValues(new Uint8Array(12));
-            const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["encrypt"]);
-            const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, encoded);
-            return new Uint8Array([...iv, ...new Uint8Array(encrypted)]);
-        }
+2. **Registering a user**:
+   - When prompted with `Do you want to register a new account? (yes/no):`, enter `yes` or `y`.
+   - Enter a username and password for registration.
+   - If registration is successful, you will see `User registered successfully`, and the client will proceed to authentication with the same credentials.
+   - If the username is already taken, the client will exit with an error (e.g., `Registration failed: User already exists`).
 
-        async function decryptMessage(ciphertext, key) {
-            const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["decrypt"]);
-            const iv = ciphertext.slice(0, 12);
-            const data = ciphertext.slice(12);
-            const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, data);
-            return new TextDecoder().decode(decrypted);
-        }
+3. **Logging in**:
+   - If you choose `no` at the registration prompt, enter a username and password for login.
+   - If authentication fails, the client will exit with an error (e.g., `Authentication failed: invalid username or password`).
+   - On success, you will see `Authentication successful`.
 
-        const key = new TextEncoder().encode("examplekey1234567890123456789012"); // Must match server key
-        // Use ws:// for HTTP or wss:// for HTTPS
-        const ws = new WebSocket("wss://localhost:8080/ws"); // Adjust to ws:// if not using HTTPS
+4. **Sending messages**:
+   - Type a message and press Enter to send it (e.g., `Hello, world!`).
+   - Messages are encrypted with AES-GCM and broadcast to all connected clients.
+   - Type `exit` to quit the client.
 
-        ws.onopen = function() {
-            console.log("Connected to WebSocket server");
-        };
+5. **Receiving messages**:
+   - Received messages are decrypted and displayed with the sender's username (e.g., `Received from Bartekbk: Hello, world!`).
 
-        ws.onmessage = async function(event) {
-            const messages = document.getElementById("messages");
-            let message = event.data;
-            // If using application-layer encryption, decrypt the message
-            if (typeof event.data !== "string") {
-                message = await decryptMessage(new Uint8Array(await event.data.arrayBuffer()), key);
-            }
-            messages.innerHTML += `<p>${message}</p>`;
-        };
+### Testing with Postman
 
-        async function sendMessage() {
-            const input = document.getElementById("message");
-            let message = input.value;
-            // If using application-layer encryption, encrypt the message
-            const encryptedMessage = await encryptMessage(message, key);
-            ws.send(encryptedMessage);
-            input.value = "";
-        }
-    </script>
-</body>
-</html>
-```
+1. **Register a user**:
+   - Create a POST request to `http://localhost:8080/register`.
+   - Set headers: `Content-Type: application/json`.
+   - Body (raw JSON):
 
-Save this as `index.html`, serve it with a simple HTTP/HTTPS server (e.g., using Node.js with `https` module or a reverse proxy like Nginx), and open it in a browser to connect to the WebSocket server. Note: If using self-signed certificates with HTTPS, you may need to accept a security warning in the browser.
+     ```json
+     {
+         "username": "testuser",
+         "password": "testpassword123"
+     }
+     ```
+
+   - Expected response: `201 Created` with `User registered successfully`.
+
+2. **Test WebSocket**:
+   - Create a WebSocket request in Postman to `ws://localhost:8080/ws`.
+   - Send an authentication message (JSON) immediately after connecting:
+
+     ```json
+     {
+         "username": "testuser",
+         "password": "testpassword123"
+     }
+     ```
+
+   - If authentication succeeds, you will receive `Authentication successful`.
+   - Send AES-GCM encrypted messages in JSON format `{ "username": "testuser", "content": "Hello" }` (or test with the console client for simplicity).
+
+### Example Usage
+
+1. Start the server:
+
+   ```bash
+   go run main.go -port=8080 -https=false
+   ```
+
+2. Start a client in a terminal:
+
+   ```bash
+   go run client.go
+   ```
+
+3. Register a new user:
+
+   ```
+   Do you want to register a new account? (yes/no): y
+   Enter username for registration: Bartekbk
+   Enter password for registration: P@ssword
+   User registered successfully
+   Connected to WebSocket server
+   Authentication successful
+   Enter messages to send (type 'exit' to quit):
+   >
+   ```
+
+4. Start another client and register or log in with a different user (e.g., `testuser2`):
+
+   ```
+   Do you want to register a new account? (yes/no): y
+   Enter username for registration: testuser2
+   Enter password for registration: Test123
+   User registered successfully
+   Connected to WebSocket server
+   Authentication successful
+   Enter messages to send (type 'exit' to quit):
+   >
+   ```
+
+5. In the first client, send a message:
+
+   ```
+   > Hello from Bartekbk!
+   Sent: Hello from Bartekbk!
+   ```
+
+6. The second client should receive:
+
+   ```
+   Received from Bartekbk: Hello from Bartekbk!
+   ```
 
 ## Project Structure
 
-- `main.go`: The main server code that handles WebSocket connections and message broadcasting with optional TLS and AES-GCM encryption.
-- `go.mod`: Go module file containing dependencies (created after running `go mod init`).
-- `cert.pem` (optional): SSL/TLS certificate file (required for HTTPS/WSS).
-- `key.pem` (optional): SSL/TLS private key file (required for HTTPS/WSS).
+```
+linkup/
+├── main.go        # WebSocket server with user registration and message broadcasting
+├── client.go      # Console-based WebSocket client with registration and authentication
+├── go.mod         # Go module file with dependencies
+├── .env           # Environment file with AES_KEY
+├── users.db       # SQLite database for user data (created automatically)
+├── cert.pem       # SSL/TLS certificate (optional, for HTTPS)
+└── key.pem        # SSL/TLS private key (optional, for HTTPS)
+```
 
-## Production Certificates
+## Production Notes
 
-For production, use certificates from a trusted Certificate Authority like Let's Encrypt:
+- **TLS Certificates**: For production, use certificates from a trusted CA like Let's Encrypt:
 
-1. **Install Certbot**:
-
-   ```bash
-   sudo apt update
-   sudo apt install certbot
-   ```
-
-2. **Obtain a certificate**:
-
-   ```bash
-   sudo certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com
-   ```
-
-3. **Run the server with production certificates**:
-
-   ```bash
-   go run main.go -port=443 -https -cert=/etc/letsencrypt/live/yourdomain.com/fullchain.pem -key=/etc/letsencrypt/live/yourdomain.com/privkey.pem
-   ```
-
-4. **Automate certificate renewal**:
-   Add a cron job to renew certificates:
-
-   ```bash
-   sudo crontab -e
-   ```
-
-   Add:
-
-   ```bash
-   0 0,12 * * * certbot renew --quiet
-   ```
-
-## Notes
+  ```bash
+  sudo apt update
+  sudo apt install certbot
+  sudo certbot certonly --standalone -d yourdomain.com
+  go run main.go -port=443 -https=true -cert=/etc/letsencrypt/live/yourdomain.com/fullchain.pem -key=/etc/letsencrypt/live/yourdomain.com/privkey.pem
+  ```
 
 - **Security**:
-  - The server supports optional HTTPS/TLS (`wss://`) for transport-layer encryption, enabled with the `-https` flag.
-  - Optional application-layer encryption (AES-GCM) provides end-to-end security but requires clients to use the same encryption key.
-  - The WebSocket server allows connections from any origin (`CheckOrigin` returns `true`). For production, restrict allowed origins to prevent unauthorized access.
-  - The AES key is hardcoded for simplicity. In production, use a secure key exchange mechanism (e.g., Diffie-Hellman).
-  - For production, always use HTTPS (`-https=true`) with trusted certificates to ensure secure communication.
-- **Error Handling**: The server logs errors for connection upgrades, message reading, writing, and encryption/decryption. Ensure proper monitoring in a production environment.
-- **Extending for Tic-Tac-Toe**: The server can be extended to support a multiplayer Tic-Tac-Toe game by adding game logic to process structured messages (e.g., JSON with row, column, and player data).
+  - Restrict WebSocket origins in `upgrader.CheckOrigin` for production.
+  - Use a secure key exchange mechanism instead of a hardcoded `AES_KEY`.
+  - Regularly back up the `users.db` database.
+  - Implement rate limiting for `/register` to prevent abuse.
+- **Scalability**: Use a more robust database (e.g., PostgreSQL) for large-scale deployments.
 
 ## Troubleshooting
 
-- **Connection Errors**: Ensure the server is running, the port is not blocked, and the correct protocol (`ws://` or `wss://`) is used. If using HTTPS with self-signed certificates, accept the security warning in the browser.
-- **Dependency Issues**: Verify that the `github.com/gorilla/websocket` package is installed correctly by running `go mod tidy`.
-- **Client Disconnections**: The server automatically removes disconnected clients. If a client fails to receive messages, check for network issues or ensure the client handles WebSocket reconnection properly.
-- **Encryption Errors**: If using application-layer encryption, ensure the client and server use the same AES key and that the key is 32 bytes long (for AES-256).
-- **HTTPS Errors**: Ensure the certificate and key files are valid and accessible. For production, use certificates from a trusted CA like Let's Encrypt.
+- **Database Issues**:
+  - Ensure the program has write permissions in the project directory for `users.db`.
+  - Check logs for database errors and verify SQLite installation (`go get github.com/mattn/go-sqlite3`).
+- **WebSocket Connection Errors**:
+  - Verify the server is running and the port (default 8080) is not blocked.
+  - Use `ws://localhost:8080/ws` for HTTP or `wss://localhost:8080/ws` for HTTPS.
+- **Authentication Errors**:
+  - Ensure the username and password match a registered user in the database.
+  - Check server logs for authentication failures.
+- **Registration Errors**:
+  - If registration fails, check for errors like `User already exists` or network issues.
+  - Ensure the server is running and accessible at `http://localhost:8080/register`.
+- **Encryption Errors**:
+  - Ensure the `AES_KEY` in the client and server `.env` files is identical and 32 bytes long.
+  - If testing without encryption, temporarily modify `handleConnections` and `handleMessages` in `main.go` to bypass AES-GCM.
+- **Client Disconnections**:
+  - The server automatically removes disconnected clients. Check logs for `Read error` or `Write error`.
 
-## License
+## Extending the Project
 
-This project is unlicensed and provided as-is for educational purposes.
+- **JWT Authentication**: Replace the current authentication with JWT tokens for stateless verification.
+- **Mobile Client**: Create a mobile app using Flutter or React Native to connect to the server.
+- **Game Logic**: Extend the server to support multiplayer games like Tic-Tac-Toe by processing structured JSON messages.
+- **Message Persistence**: Store messages in the database for chat history.
